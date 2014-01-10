@@ -306,7 +306,9 @@ function Box(SOCKET) {
                 break;
             case 'PVT':
                 Utils.log('Got PVT!');
-                //console.log(ACK(socket, info.IMEI, detail.RAW));
+                PVTDataHandler(detail.DATA, function(result) {
+                    sendFMICommand(ACKBuilder(detail.ID));
+                });
                 break;
             case 'ESN':
                 Utils.log('Got ESN');
@@ -453,6 +455,30 @@ function Box(SOCKET) {
                 break;
         }
 
+    }
+
+
+    function PVTDataHandler(DATA, callback) {
+        var result = new Array();
+        result.AlT ='';
+        result.EPE = '';
+        result.EPV = '';
+        result.EPH = '';
+        result.GPSFIX = '';
+        result.TIMEOFWEEK ='';
+        result.LAT = '';
+        result.LON = '';
+        result.EASTVEL = '';
+        result.NORTHVEL = '';
+        result.UPVEL = '';
+        result.ABOVESEA = '';
+        result.LEAPSECS = '';
+        result.NUMWEEKDAYS = '';
+        
+        console.log(DATA);
+        if (callback) {
+            callback(result);
+        }
     }
     function stopStatusReciptBuilder(uid) {
         var result = 'a1061202' + reversePacket(uid);
@@ -798,23 +824,7 @@ function Box(SOCKET) {
         return getPacketID(command);
     }
 
-    /**
-     * Turn on PVT Data
-     * @param {Socket} socket
-     * @param {text} IMEI
-     * @return {text} packet id
-     */
-    function PVTOn(socket, IMEI) {
-        var cmd = '100a023100c31003';
-        var commandString = '@PCswFMI,' + IMEI + ',' + cmd + '\r\n';
-        socket.write(commandString);
-        var pid = getPacketID(cmd);
-        return pid;
-    }
 
-    function PVTDecode() {
-
-    }
 
 
     function ACKBuilder(ID) {
@@ -1426,7 +1436,7 @@ function Box(SOCKET) {
                 break;
 
             case 'PVT':
-                //commandQueue.enqueue(PVTFunction(data[1]));
+                commandQueue.enqueue(PVTFunction(data[1]));
                 break;
 
             default:
@@ -1441,7 +1451,6 @@ function Box(SOCKET) {
     }
 
     function PVTFunction(state) {
-
         if (state === 'ON') {
             return '100a023100c31003';
 

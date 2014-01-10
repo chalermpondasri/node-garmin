@@ -26,10 +26,6 @@ var numCPUs = require('os').cpus().length;
  */
 var boxPort_listening = 6543;
 if (cluster.isMaster) {
-
-
-//---------------------------------------------------------------
-
 //Fork new clients equal to cpu cores
     for (var i = 0; i < numCPUs; i++) {
         var worker = cluster.fork();
@@ -64,7 +60,6 @@ if (cluster.isMaster) {
 //    });
 //    HTTPServer.listen(1337);
 //---------------------------------------------------------
-
     var TCPServer = net.createServer(function(socket) {
         socket.setTimeout(12 * 60 * 1000, function() { // 12 minutes timeout inactive
             Utils.log('Connection Time-out.');
@@ -259,6 +254,7 @@ function Box(SOCKET) {
                             commandPoolHandler(result[i]);
                         }
                         pg_removePoolingCommandField(info.IMEI);
+
                     }
                 });
 
@@ -289,8 +285,10 @@ function Box(SOCKET) {
     }).on('end', function() {
         console.log('end');
     }).on('close', function() {
-        Utils.log('PID ' + process.pid + ': Communication Close');
-        //process.exit(0);
+        Utils.log('PID ' + process.pid + ': Communication End');
+        TCPServer.getConnections(function(error, count) {
+            Utils.log('Remaining Connection: ' + count);
+        });
         console.log('----------------------------------------------------\n\n');
     });
 //--------- Member Functions -----------------
@@ -346,6 +344,22 @@ function Box(SOCKET) {
                 sendFMICommand(ACKBuilder(detail.ID));
                 get0x0020MessageACKDetail(detail.DATA, function(result) {
                     console.log(result);
+                    switch (parseInt(result.ANSWER, 16)) {
+                        case 0:
+                            result.MESSAGE = 'OK';
+                            break;
+                        case 1:
+                            result.MESSAGE = 'YES';
+                            break;
+                        case 2:
+                            result.MESSAGE = 'NO';
+                            break;
+                        default:
+                            result.MESSAGE = 'UNKNOW';
+                            break;
+
+                    }
+                    pg_insertMessage(info.IMEI, result);
                     commandQueue.enqueue(ACKRecipeBuilder(result.ID));
                 });
                 break;
@@ -353,6 +367,7 @@ function Box(SOCKET) {
             case 0x0026://  A607 Client to Server Text Message
                 Utils.log('Got FMP -  A607 Client to Server Text Message');
                 get0x0026MessageDetail(detail.DATA, function(result) {
+                    console.log(result);
                     commandQueue.enqueue(textMessageRecipeBuilder(result.UNIQUEID));
                     pg_insertMessage(boxInfo.IMEI, result);
                     sendFMICommand(ACKBuilder(detail.ID));
@@ -376,7 +391,8 @@ function Box(SOCKET) {
                 Utils.log('Got FMP - Text Message Status');
 
                 get0x0041TextMessageStatusDetail(detail.DATA, function(result) {
-                    console.log(result);
+                    Utils.log('PG: Updating Message Status');
+                    pg_updateMessageStatus(result);
                     sendFMICommand(ACKBuilder(detail.ID));
                 });
                 break;
@@ -508,7 +524,7 @@ function Box(SOCKET) {
         var result = new Array();
         result.CHANGEID = reversePacket(DATA.substr(4, 8));
         result.CHANGETIME = reversePacket(DATA.substr(12, 8));
-        result.STATUSID = reversePacket(DATA.substr(20, 8));
+        result.STATUSID = reversePacket(DATA.substr(22, 8));
         result.DRIVERINDEX = 0; // For Single Driver, Only have index 0;
         console.log(result);
         if (callback) {
@@ -544,10 +560,16 @@ function Box(SOCKET) {
     }
 
     function get0x0020MessageACKDetail(data, callback) {
+        console.log(data);
         var result = new Array();
         result.TIME = reversePacket(data.substr(4, 8));
-        result.ID = data.substr(20, parseInt(12, 16));
+        result.IDSIZE = parseInt(data.substr(12, 2), 16);
+        result.ID = reversePacket(data.substr(20, 2 * result.IDSIZE));
         result.ANSWER = reversePacket(data.substring(52));
+        result.LINKEDID = result.ID;
+        result.UNIQUEID = 'FFFFFFFF';
+        result.LAT = '80000000';
+        result.LON = '80000000';
         if (callback) {
             callback(result);
         }
@@ -666,7 +688,7 @@ function Box(SOCKET) {
         var IDSize = getPayloadSize(stringToHexString(msg.messageID)); // 1 byte
         var msgType = (msg.immediate === 'on' && msg.messageType === '002a') ? '01' : '00'; // 1 byte
         var reserved = '0000'; // 2 bytes, 0x0000 only
-        var mesg = unicodeEncode(msg.message);
+        var mesg = unicodeEncode(msg.message) + '00';
         return FMIset + time + IDSize + msgType + reserved + msgID + mesg;
     }
 
@@ -1249,7 +1271,7 @@ function Box(SOCKET) {
     function pg_insertMessage(IMEI, dataSet) {
         var sql = "INSERT INTO \"RecvMessages\"(\"Box_IMEI\", \"time\", lat, lon, uniqueid, linkid, message)";
         sql += " VALUES ('" + IMEI + "', '" + dataSet.TIME + "', '" + dataSet.LAT + "', '" + dataSet.LON + "', '" + dataSet.UNIQUEID + "', '" + dataSet.LINKEDID + "', '" + dataSet.MESSAGE + "');";
-
+        console.log(sql);
         var client = new pg.Client(pgConnectionInfo);
         client.connect(function(error) {
             if (error) {
@@ -1343,14 +1365,35 @@ function Box(SOCKET) {
 
     }
 
+    function pg_updateMessageStatus(result) {
+        var sql = "UPDATE \"SentMessages\"   SET  mesg_status='" + result.STATUS + "' WHERE \"mesg_IMEI\"='" + info.IMEI + "' AND mesg_id='" + result.MESG_ID + "' ;";
+        var client = new pg.Client(pgConnectionInfo);
+        client.connect(function(error) {
+            if (error) {
+                client.end();
+                console.error(error);
+                return error;
+            }
+            client.query(sql, function(error, result) {
+                client.end();
+                if (error) {
+                    console.error(error);
+                    return error;
+                }
+            });
+
+        });
+
+    }
+
 
     function initCommandQueue() {
         // Set Driver Status List Items
-        //commandQueue.enqueue(statusListBuilder(0, 'status 0'));
-        //commandQueue.enqueue(statusListBuilder(1, 'status 1'));
-        //commandQueue.enqueue(statusListBuilder(2, 'Status 2'));
+        commandQueue.enqueue(statusListBuilder(0, 'status 0'));
+        commandQueue.enqueue(statusListBuilder(1, 'status 1'));
+        commandQueue.enqueue(statusListBuilder(2, 'Status 2'));
         // set initial status to index 0 
-        //commandQueue.enqueue(defaultStatusBuilder());
+        commandQueue.enqueue(defaultStatusBuilder());
         // queue: Requesting Driver ID
         commandQueue.enqueue('10a102101008451003');
         // queue: Requesting Driver Status
@@ -1366,6 +1409,7 @@ function Box(SOCKET) {
                 str = querystring.parse(data[1]);
                 pg_storeSentMessage(str, function() {
                     commandQueue.enqueue(messageBuilder(str));
+                    //sendFMICommand(messageBuilder(str));
                 });
 
                 break;
@@ -1381,6 +1425,10 @@ function Box(SOCKET) {
                 console.log(('Checkpoints : ' + data[1]).red);
                 break;
 
+            case 'PVT':
+                //commandQueue.enqueue(PVTFunction(data[1]));
+                break;
+
             default:
                 console.error('Unhandle Pooling Command!');
                 break;
@@ -1390,6 +1438,16 @@ function Box(SOCKET) {
         return str;
 
 
+    }
+
+    function PVTFunction(state) {
+
+        if (state === 'ON') {
+            return '100a023100c31003';
+
+        } else {
+            return '100a023200c21003';
+        }
     }
 
     function defaultStatusBuilder() {
@@ -1412,7 +1470,5 @@ function Box(SOCKET) {
         }
         return result;
     }
-
-
 
 }

@@ -133,15 +133,35 @@ function Queue() {
 // Stack Abstract Datatype implementation
 function Stack() {
     var array = new Array();
+    /**
+     * Push new object into stack
+     * @param {object} data Object to be stored
+     * @returns {Number} size Stack size
+     */
     this.push = function(data) {
         return array.push(data);
     };
+
+    /**
+     * Pop-out the top object
+     * @returns {Object} object
+     */
     this.pop = function() {
         return array.pop();
     };
+
+    /**
+     * Get the stack size
+     * @returns {Number}
+     */
     this.size = function() {
         return array.length;
     };
+
+    /**
+     * Check if the stack is empty
+     * @returns {Boolean} true if stack is empty, false otherwise
+     */
     this.isEmpty = function() {
         return array.length === 0;
     };
@@ -227,6 +247,7 @@ function Box(SOCKET) {
     var boxInfo;
 //    var sentCommandPool = new Pool();
     var commandQueue = new Queue();
+
     socket.on('data', function(packet) {
         var recvPacket = packet.toString();
         console.log('------------ Start of chunk --------------'.red);
@@ -254,7 +275,6 @@ function Box(SOCKET) {
                             commandPoolHandler(result[i]);
                         }
                         pg_removePoolingCommandField(info.IMEI);
-
                     }
                 });
 
@@ -293,6 +313,11 @@ function Box(SOCKET) {
     });
 //--------- Member Functions -----------------
 
+    /**
+     * Handle the FMI packet by type
+     * @param {String} detail the whole packet data
+     * @param {Function} callback call back function
+     */
     function FMIHandler(detail, callback) {
         //  console.log(detail);
         switch (detail.TYPE) {
@@ -323,10 +348,12 @@ function Box(SOCKET) {
         if (callback) {
             callback();
         }
-        return;
     }
 
-
+    /**
+     * Handle the FMP packet by type of FMP
+     * @param {type} detail packet data
+     */
     function FMPHandler(detail) {
 
         var FMIPacketID = getClientFMIPacketID(detail.RAW);
@@ -410,7 +437,7 @@ function Box(SOCKET) {
             case 0x0211: // Stop Status
                 Utils.log('Got FMP - Stop Status');
                 getStopIDAndStatus(detail.DATA, function(result) {
-                    commandQueue.enqueue(stopStatusReciptBuilder(result.ID));
+                    commandQueue.enqueue(stopStatusReceiptBuilder(result.ID));
                     pg_updateStoppointStatus(result);
                     sendFMICommand(ACKBuilder(detail.ID));
                 });
@@ -457,15 +484,21 @@ function Box(SOCKET) {
 
     }
 
-
+//@todo write pvt data handler
+    /**
+     * PVT Data handler, return the array object that contain PVT data detail
+     * @param {type} DATA
+     * @param {type} callback
+     * @returns {Array} PVT Data detail
+     */
     function PVTDataHandler(DATA, callback) {
         var result = new Array();
-        result.AlT ='';
+        result.AlT = '';
         result.EPE = '';
         result.EPV = '';
         result.EPH = '';
         result.GPSFIX = '';
-        result.TIMEOFWEEK ='';
+        result.TIMEOFWEEK = '';
         result.LAT = '';
         result.LON = '';
         result.EASTVEL = '';
@@ -474,13 +507,21 @@ function Box(SOCKET) {
         result.ABOVESEA = '';
         result.LEAPSECS = '';
         result.NUMWEEKDAYS = '';
-        
+
         console.log(DATA);
         if (callback) {
             callback(result);
         }
+
+        return result;
     }
-    function stopStatusReciptBuilder(uid) {
+
+    /**
+     * Create the Stop Status Receipt command
+     * @param {text} uid Unique ID of received Stop Status
+     * @returns {String} result
+     */
+    function stopStatusReceiptBuilder(uid) {
         var result = 'a1061202' + reversePacket(uid);
         result = '10' + result + calChecksum(result) + '1003';
         return result;
@@ -488,6 +529,12 @@ function Box(SOCKET) {
     }
 
 
+    /**
+     * Get the Stop ID and Staus from the packet
+     * @param {type} data FMP payload data packet
+     * @param {type} callback callback function
+     * @returns {Array} result
+     */
     function getStopIDAndStatus(data, callback) {
         var result = new Array();
         result.ID = reversePacket(data.substr(4, 8));
@@ -499,6 +546,10 @@ function Box(SOCKET) {
         return result;
     }
 
+    /**
+     * Buid the data payload for every stoppoint in database
+     * @param {type} sid
+     */
     function  stoppointBuilder(sid) {
         console.log('getting stoppoint data...');
         pg_getStoppointDetail(sid, function(result) {
@@ -512,8 +563,6 @@ function Box(SOCKET) {
 
 
     }
-
-
 
     /**
      * Convert a Hex String to array of int
@@ -530,9 +579,9 @@ function Box(SOCKET) {
     }
     /**
      * Extract the driver information from payloaded data
-     * @param {type} DATA payload data
+     * @param {String} DATA payload data
      * @param {callback} callback callback function
-     * @returns {Array} array of information
+     * @returns {Array} array of data
      */
 
     function getDriverID(DATA, callback) {
@@ -545,8 +594,14 @@ function Box(SOCKET) {
         }
     }
 
+    /**
+     * Get the driver status for the payload
+     * @param {String} DATA data payload
+     * @param {Function} callback
+     * @returns {Array} result
+     */
+
     function getDriverStatus(DATA, callback) {
-        //0813000000D96F2F2D01000000000000006A1003
         var result = new Array();
         result.CHANGEID = reversePacket(DATA.substr(4, 8));
         result.CHANGETIME = reversePacket(DATA.substr(12, 8));
@@ -559,7 +614,13 @@ function Box(SOCKET) {
         return result;
 
     }
-
+    /**
+     * Buid the status list to be sent
+     * @param {Number} id desired list id
+     * @param {String} statusText
+     * @param {Function} callback
+     * @returns {String} result
+     */
     function statusListBuilder(id, statusText, callback) {
         var hexID = zeroTailPadding(parseInt(id, 16), 4);
         var text = unicodeEncode(statusText);
@@ -658,7 +719,7 @@ function Box(SOCKET) {
 
     /**
      * Calculate the 2'complement packpet checksum and return if data valid or not 
-     * @param {Text} byteString RAW Packet data input
+     * @param {String} byteString RAW Packet data input
      * @returns {Boolean} result true if packet checksum is valid
      */
     function isPacketValid(byteString) {

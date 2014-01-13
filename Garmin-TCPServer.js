@@ -247,7 +247,6 @@ function Box(SOCKET) {
     var boxInfo;
 //    var sentCommandPool = new Pool();
     var commandQueue = new Queue();
-
     socket.on('data', function(packet) {
         var recvPacket = packet.toString();
         console.log('------------ Start of chunk --------------'.red);
@@ -277,7 +276,6 @@ function Box(SOCKET) {
                         pg_removePoolingCommandField(info.IMEI);
                     }
                 });
-
                 // Utils.log(commandQueue.toString());
 
                 if (!commandQueue.isEmpty()) {
@@ -367,7 +365,6 @@ function Box(SOCKET) {
                 Utils.log('ACK to Support Data');
                 sendFMICommand(ACKBuilder(detail.ID));
                 break;
-
             case 0x0020:
                 Utils.log('Got FMP - Text Message ACK');
                 sendFMICommand(ACKBuilder(detail.ID));
@@ -386,13 +383,11 @@ function Box(SOCKET) {
                         default:
                             result.MESSAGE = 'UNKNOW';
                             break;
-
                     }
                     pg_insertMessage(info.IMEI, result);
                     commandQueue.enqueue(ACKRecipeBuilder(result.ID));
                 });
                 break;
-
             case 0x0026://  A607 Client to Server Text Message
                 Utils.log('Got FMP -  A607 Client to Server Text Message');
                 get0x0026MessageDetail(detail.DATA, function(result) {
@@ -401,9 +396,7 @@ function Box(SOCKET) {
                     pg_insertMessage(boxInfo.IMEI, result);
                     sendFMICommand(ACKBuilder(detail.ID));
                 });
-
                 break;
-
             case 0x002b: // Text Message Recipt
                 Utils.log('Got FMP - Text Message Recipe');
                 sendFMICommand(ACKBuilder(detail.ID));
@@ -414,26 +407,24 @@ function Box(SOCKET) {
                     console.log(result);
                 });
                 break;
-
             case 0x0041: // Text Message Status
                 //console.log(detail);
                 Utils.log('Got FMP - Text Message Status');
-
                 get0x0041TextMessageStatusDetail(detail.DATA, function(result) {
                     Utils.log('PG: Updating Message Status');
                     pg_updateMessageStatus(result);
                     sendFMICommand(ACKBuilder(detail.ID));
                 });
                 break;
-
             case 0x0201: // ETA Data
                 Utils.log('Got FMP - ETA');
                 getETADetail(detail.DATA, function(result) {
+                    console.log(result);
+                    pg_storeETADetail(result);
                     commandQueue.enqueue(ETAReceiptBuilder(result.UNIQUEID));
                     sendFMICommand(ACKBuilder(detail.ID));
                 });
                 break;
-
             case 0x0211: // Stop Status
                 Utils.log('Got FMP - Stop Status');
                 getStopIDAndStatus(detail.DATA, function(result) {
@@ -442,7 +433,6 @@ function Box(SOCKET) {
                     sendFMICommand(ACKBuilder(detail.ID));
                 });
                 break;
-
             case 0x0813:// Driver ID Update D607
                 Utils.log('Got FMP - Driver ID Packet');
                 getDriverID(detail.DATA, function(driverID) {
@@ -460,12 +450,10 @@ function Box(SOCKET) {
                     pg_putNewBoxInfo(boxInfo);
                 });
                 break;
-
             case 0x0802: // Set Driver Status List Item Receipt
                 Utils.log('Got FMP - Set Driver Status List Item Receipt');
                 sendFMICommand(ACKBuilder(detail.ID));
                 break;
-
             case 0x0823: // A607 Driver Status Update
                 Utils.log('Got FMP - Driver Status Update');
                 getDriverStatus(detail.DATA, function(result) {
@@ -475,7 +463,6 @@ function Box(SOCKET) {
 //                    sentCommandPool.put(sentPacket);
                 });
                 break;
-
             default:
                 console.error('Unhandled FMP packet:'.red);
                 console.error(detail.data);
@@ -492,13 +479,14 @@ function Box(SOCKET) {
      * @returns {Array} PVT Data detail
      */
     function PVTDataHandler(DATA, callback) {
+        console.log(DATA.green);
         var result = new Array();
         result.AlT = '';
         result.EPE = '';
         result.EPV = '';
         result.EPH = '';
-        result.GPSFIX = '';
-        result.TIMEOFWEEK = '';
+        result.GPSFIX = reverseToLE(DATA.substr(40, 4));
+        result.TIMEOFWEEK = reverseToLE(DATA.substr(48, 4)); // 24th byte ?
         result.LAT = '';
         result.LON = '';
         result.EASTVEL = '';
@@ -507,7 +495,6 @@ function Box(SOCKET) {
         result.ABOVESEA = '';
         result.LEAPSECS = '';
         result.NUMWEEKDAYS = '';
-
         console.log(DATA);
         if (callback) {
             callback(result);
@@ -522,10 +509,9 @@ function Box(SOCKET) {
      * @returns {String} result
      */
     function stopStatusReceiptBuilder(uid) {
-        var result = 'a1061202' + reversePacket(uid);
+        var result = 'a1061202' + reverseToLE(uid);
         result = '10' + result + calChecksum(result) + '1003';
         return result;
-
     }
 
 
@@ -537,7 +523,7 @@ function Box(SOCKET) {
      */
     function getStopIDAndStatus(data, callback) {
         var result = new Array();
-        result.ID = reversePacket(data.substr(4, 8));
+        result.ID = reverseToLE(data.substr(4, 8));
         result.STATUS = parseInt(data.substr(12, 2), 16);
         result.INDEX = parseInt(data.substr(14, 4), 16);
         if (callback) {
@@ -554,14 +540,11 @@ function Box(SOCKET) {
         console.log('getting stoppoint data...');
         pg_getStoppointDetail(sid, function(result) {
             console.log(result);
-            var r = '0101' + reversePacket(result.time) + reversePacket(result.lat) + reversePacket(result.lon) + reversePacket(result.sid) + unicodeEncode(result.desc) + '00';
+            var r = '0101' + reverseToLE(result.time) + reverseToLE(result.lat) + reverseToLE(result.lon) + reverseToLE(result.sid) + unicodeEncode(result.desc) + '00';
             r = 'a1' + getPayloadSize(r) + r;
             r = '10' + r + calChecksum(r) + '1003';
             commandQueue.enqueue(r);
         });
-
-
-
     }
 
     /**
@@ -586,8 +569,8 @@ function Box(SOCKET) {
 
     function getDriverID(DATA, callback) {
         var result = new Array();
-        result.CHANGEID = reversePacket(DATA.substr(4, 8));
-        result.CHANGETIME = reversePacket(DATA.substr(12, 8));
+        result.CHANGEID = reverseToLE(DATA.substr(4, 8));
+        result.CHANGETIME = reverseToLE(DATA.substr(12, 8));
         result.DRIVER_ID = unicodeDecode(hexStringToByteArray(DATA.substring(28, DATA.length - 2)));
         if (callback) {
             callback(result);
@@ -603,16 +586,15 @@ function Box(SOCKET) {
 
     function getDriverStatus(DATA, callback) {
         var result = new Array();
-        result.CHANGEID = reversePacket(DATA.substr(4, 8));
-        result.CHANGETIME = reversePacket(DATA.substr(12, 8));
-        result.STATUSID = reversePacket(DATA.substr(22, 8));
+        result.CHANGEID = reverseToLE(DATA.substr(4, 8));
+        result.CHANGETIME = reverseToLE(DATA.substr(12, 8));
+        result.STATUSID = reverseToLE(DATA.substr(22, 8));
         result.DRIVERINDEX = 0; // For Single Driver, Only have index 0;
         console.log(result);
         if (callback) {
             callback(result);
         }
         return result;
-
     }
     /**
      * Buid the status list to be sent
@@ -636,10 +618,9 @@ function Box(SOCKET) {
 
     function get0x002bMessageRecipeDetail(data, callback) {
         var result = new Array();
-        result.TIME = reversePacket(data.substr(4, 8));
+        result.TIME = reverseToLE(data.substr(4, 8));
         result.ID = data.substr(20, parseInt(12, 16));
         result.SUCCESS = (data.substr(14, 2) === '01') ? true : false;
-
         if (callback) {
             callback(result);
         }
@@ -649,10 +630,10 @@ function Box(SOCKET) {
     function get0x0020MessageACKDetail(data, callback) {
         console.log(data);
         var result = new Array();
-        result.TIME = reversePacket(data.substr(4, 8));
+        result.TIME = reverseToLE(data.substr(4, 8));
         result.IDSIZE = parseInt(data.substr(12, 2), 16);
-        result.ID = reversePacket(data.substr(20, 2 * result.IDSIZE));
-        result.ANSWER = reversePacket(data.substring(52));
+        result.ID = reverseToLE(data.substr(20, 2 * result.IDSIZE));
+        result.ANSWER = reverseToLE(data.substring(52));
         result.LINKEDID = result.ID;
         result.UNIQUEID = 'FFFFFFFF';
         result.LAT = '80000000';
@@ -689,10 +670,10 @@ function Box(SOCKET) {
         result.MESSAGE = '';
         //-------------------
 
-        result.TIME = reversePacket(data.substr(4, 8)); // starting with 4th byte for 4 bytes
-        result.LAT = reversePacket(data.substr(12, 8));
-        result.LON = reversePacket(data.substr(20, 8));
-        result.UNIQUEID = reversePacket(data.substr(28, 8));
+        result.TIME = reverseToLE(data.substr(4, 8)); // starting with 4th byte for 4 bytes
+        result.LAT = reverseToLE(data.substr(12, 8));
+        result.LON = reverseToLE(data.substr(20, 8));
+        result.UNIQUEID = reverseToLE(data.substr(28, 8));
         result.MESSAGE = unicodeDecode(hexStringToByteArray(data.substring(76, data.length - 2)));
         result.LINKIDSIZE = parseInt(data.substr(36, 2), 16);
         result.LINKEDID = data.substr(44, result.LINKIDSIZE * 2);
@@ -703,7 +684,7 @@ function Box(SOCKET) {
     }
 
     function textMessageRecipeBuilder(UNIQUEID) {
-        var message = 'a1062500' + reversePacket(UNIQUEID);
+        var message = 'a1062500' + reverseToLE(UNIQUEID);
         message = '10' + message + calChecksum(message) + '1003';
         return message;
     }
@@ -769,8 +750,8 @@ function Box(SOCKET) {
     }
 
     function messageDataBuilder(msg) {
-        var FMIset = reversePacket(msg.messageType); // 2 bytes
-        var time = reversePacket(getTimeFrom1989()); // 4 bytes
+        var FMIset = reverseToLE(msg.messageType); // 2 bytes
+        var time = reverseToLE(getTimeFrom1989()); // 4 bytes
         var msgID = zeroTailPadding(stringToHexString(msg.messageID), 16); // 16 byte
         var IDSize = getPayloadSize(stringToHexString(msg.messageID)); // 1 byte
         var msgType = (msg.immediate === 'on' && msg.messageType === '002a') ? '01' : '00'; // 1 byte
@@ -813,11 +794,11 @@ function Box(SOCKET) {
 
 
     /**
-     * Reverse the input bytes
-     * @param {text} packet
-     * @returns {String} reversedPacket
+     * Reverse the input bytes to Little-Endian Packet
+     * @param {String} packet
+     * @returns {String} Reversed Packet
      */
-    function reversePacket(packet) {
+    function reverseToLE(packet) {
         var array = new Array();
         var length = packet.length / 2;
         for (var i = 0; i < length; i++) {
@@ -828,12 +809,11 @@ function Box(SOCKET) {
 
     function getETADetail(data, callback) {
         var result = new Array();
-        result.UNIQUEID = reversePacket(data.substr(4, 8));
-        result.ETA = reversePacket(data.substr(12, 8));
-        result.DIST = reversePacket(data.substr(20, 8));
-        result.LAT = reversePacket(data.substr(28, 8));
-        result.LON = reversePacket(data.substr(36, 8));
-
+        result.UNIQUEID = reverseToLE(data.substr(4, 8));
+        result.ETA = reverseToLE(data.substr(12, 8));
+        result.DIST = reverseToLE(data.substr(20, 8));
+        result.LAT = reverseToLE(data.substr(28, 8));
+        result.LON = reverseToLE(data.substr(36, 8));
         if (callback) {
             callback(result);
         }
@@ -841,7 +821,7 @@ function Box(SOCKET) {
     }
 
     function ETAReceiptBuilder(uid) {
-        var result = '0202' + reversePacket(uid);
+        var result = '0202' + reverseToLE(uid);
         result = 'a1' + getPayloadSize(result) + result;
         result = '10' + result + calChecksum(result) + '1003';
         return result;
@@ -878,7 +858,6 @@ function Box(SOCKET) {
         var commandString = '@PCswFMI,' + info.IMEI + ',' + command + '\r\n';
         Utils.log('Sending Command: ' + commandString.substring(0, commandString.length - 2));
         socket.write(commandString);
-
         if (callback) {
             callback();
         }
@@ -895,14 +874,14 @@ function Box(SOCKET) {
         return ackString;
     }
     function IDReceiptBuilder(changeID) {
-        changeID = 'a10a1208' + reversePacket(changeID) + '01000000';
+        changeID = 'a10a1208' + reverseToLE(changeID) + '01000000';
         changeID = '10' + changeID + calChecksum(changeID) + '1003';
         // console.log(changeID);
         return changeID;
     }
 
     function statusReceiptBuilder(changeID) {
-        changeID = 'a10a2208' + reversePacket(changeID) + '00000000';
+        changeID = 'a10a2208' + reverseToLE(changeID) + '00000000';
         changeID = '10' + changeID + calChecksum(changeID) + '1003';
         return changeID;
     }
@@ -936,7 +915,7 @@ function Box(SOCKET) {
      */
     function getClientFMIPacketID(FMIPacket) {
         var FMIPID = new Array();
-        FMIPID.original = reversePacket(FMIPacket.substr(6, 4));
+        FMIPID.original = reverseToLE(FMIPacket.substr(6, 4));
         FMIPID.value = parseInt(FMIPID.original, 16);
         switch (FMIPID.value) {
             case 0x0002:
@@ -1263,7 +1242,6 @@ function Box(SOCKET) {
                     callback();
                 }
             });
-
         });
     }
 
@@ -1293,8 +1271,6 @@ function Box(SOCKET) {
                 Utils.log('PG: Stop Point Status Update');
             });
         });
-
-
         if (callback) {
             return callback();
         }
@@ -1336,7 +1312,6 @@ function Box(SOCKET) {
                 return r;
             });
         });
-
     }
 
     function pg_insertMessage(IMEI, dataSet) {
@@ -1358,9 +1333,7 @@ function Box(SOCKET) {
                     return error;
                 }
             });
-
         });
-
     }
 
     function pg_removePoolingCommandField(IMEI) {
@@ -1391,7 +1364,6 @@ function Box(SOCKET) {
                 client.end();
                 console.error(error);
                 return error;
-
             }
             client.query(sql, function(error, result) {
                 client.end();
@@ -1406,9 +1378,7 @@ function Box(SOCKET) {
                 }
                 return result.rows[0];
             });
-
         });
-
     }
 
 
@@ -1421,7 +1391,6 @@ function Box(SOCKET) {
                 return error;
             }
             status = parseInt(status, 16);
-
             var sql = "UPDATE \"Boxes\"  SET \"STATUS\"='" + status + "' WHERE \"IMEI\"='" + info.IMEI + "';";
             console.log(sql);
             client.query(sql, function(error, result) {
@@ -1431,9 +1400,7 @@ function Box(SOCKET) {
                     return error;
                 }
             });
-
         });
-
     }
 
     function pg_updateMessageStatus(result) {
@@ -1452,9 +1419,7 @@ function Box(SOCKET) {
                     return error;
                 }
             });
-
         });
-
     }
 
 
@@ -1482,24 +1447,22 @@ function Box(SOCKET) {
                     commandQueue.enqueue(messageBuilder(str));
                     //sendFMICommand(messageBuilder(str));
                 });
-
                 break;
-
             case 'STOPPOINT':
                 console.log('Got Stoppoint Pool!');
                 str = data[1];
                 stoppointBuilder(str);
                 break;
-
             case 'CHECKALLPOINTS':
                 console.log('Got Check All Stoppoint Pool!');
                 console.log(('Checkpoints : ' + data[1]).red);
                 break;
-
             case 'PVT':
                 commandQueue.enqueue(PVTFunction(data[1]));
                 break;
-
+            case 'ETA':
+                commandQueue.enqueue('10a10200025b1003');
+                break;
             default:
                 console.error('Unhandle Pooling Command!');
                 break;
@@ -1507,8 +1470,48 @@ function Box(SOCKET) {
 
 
         return str;
+    }
 
 
+    function pg_storeETADetail(data) {
+        var sql_check = "SELECT count(*) AS \"total\"  FROM \"ETA\" LIMIT 1;";
+        var client = new pg.Client(pgConnectionInfo);
+        client.connect(function(error) {
+            if (error) {
+                client.end();
+                console.error(error);
+                return error;
+            }
+            client.query(sql_check, function(error, result) {
+                if (error) {
+                    console.error(error);
+                    client.end();
+                    return error;
+                }
+                var queryResult = result.rows[0].total;
+                if (queryResult === '1') {
+                    var update = "UPDATE \"ETA\" SET dist='" + parseInt(data.DIST, 16) + "', eta='" + data.ETA + "', lat='" + data.LAT + "', lon='" + data.LON + "' WHERE \"eta_imei\"='" + info.IMEI + "';";
+                    console.log(update);
+                    client.query(update, function(error, result) {
+                        client.end();
+                        if (error) {
+                            console.error(error);
+                            return error;
+                        }
+                    });
+                } else {
+                    var sql = "INSERT INTO \"ETA\"(eta_imei, dist, eta, lat, lon) VALUES ('" + info.IMEI + "', '" + parseInt(data.DIST, 16) + "', '" + data.ETA + "', '" + data.LAT + "', '" + data.LON + "');";
+                    console.log(sql);
+                    client.query(sql, function(error, result) {
+                        client.end();
+                        if (error) {
+                            console.error(error);
+                            return error;
+                        }
+                    });
+                }
+            });
+        });
     }
 
     function PVTFunction(state) {
@@ -1522,7 +1525,7 @@ function Box(SOCKET) {
 
     function defaultStatusBuilder() {
         var result = '';
-        result = '03000000' + reversePacket(getTimeFrom1989()) + '000000000000000000';
+        result = '03000000' + reverseToLE(getTimeFrom1989()) + '000000000000000000';
         result = 'a1' + getPayloadSize(result) + result;
         result = '10' + result + calChecksum(result) + '1003';
         return result;

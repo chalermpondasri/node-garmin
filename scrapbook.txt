@@ -1,0 +1,7 @@
+var from = '13.904545899999999';
+var ll = ((from/180)*Math.pow(2,31)).toString(16);
+ll = parseInt(ll,16).toString(16);
+var result  = (parseInt(ll,16)*180)/Math.pow(2,31);
+
+$("#from").html(ll);
+$("#to").html(result);

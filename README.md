@@ -1,4 +1,4 @@
 node-garmin
 ===========
 
-Garmin FMI
+Garmin FMI with Node.js Application Server

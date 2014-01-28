@@ -11,7 +11,7 @@ var pgConnectionInfo =
         {
             user: 'postgres',
             password: 'password',
-            database: 'xsense',
+            database: 'gv300',
             host: 'localhost',
             port: 5432
         };
@@ -36,30 +36,7 @@ if (cluster.isMaster) {
     });
     Utils.log('Server Start!');
 } else {
-// ------------------ HTTP Server ------------------------
-//    var HTTPServer = http.createServer(function(request, response) {
-//        var httpData;
-//        request.on('data', function(chunk) {
-//            var data = chunk.toString();
-//            httpData = getInfo(data, "&");
-//            //console.log(httpData);
-//            switch (httpData.CMD) {
-//                case 'ENABLE':
-//                    break;
-//                case 'MESSAGE':
-//                    break;
-//                default:
-//                    break;
-//            }
-//        });
-//        response.writeHead(200, {
-//            'Content-Type': 'text/html',
-//            'Access-Control-Allow-Origin': '*'
-//        });
-//        response.end('Hello World\n');
-//    });
-//    HTTPServer.listen(1337);
-//---------------------------------------------------------
+
     var TCPServer = net.createServer(function(socket) {
         socket.setTimeout(12 * 60 * 1000, function() { // 12 minutes timeout inactive
             Utils.log('Connection Time-out.');
@@ -74,6 +51,7 @@ if (cluster.isMaster) {
         TCPServer.getConnections(function(error, count) {
             Utils.log('Total Connection: ' + count);
         });
+
         var box = new Box(socket);
     });
     TCPServer.listen(boxPort_listening, function() {
@@ -85,7 +63,6 @@ if (cluster.isMaster) {
 // Queue Abstract Datatype implementation
 function Queue() {
     var array = new Array();
-
     /**
      * Check inf the given data already exist in the queue
      * @param {type} data input data
@@ -141,7 +118,6 @@ function Stack() {
     this.push = function(data) {
         return array.push(data);
     };
-
     /**
      * Pop-out the top object
      * @returns {Object} object
@@ -149,7 +125,6 @@ function Stack() {
     this.pop = function() {
         return array.pop();
     };
-
     /**
      * Get the stack size
      * @returns {Number}
@@ -157,7 +132,6 @@ function Stack() {
     this.size = function() {
         return array.length;
     };
-
     /**
      * Check if the stack is empty
      * @returns {Boolean} true if stack is empty, false otherwise
@@ -245,18 +219,29 @@ function Box(SOCKET) {
     var sentPacket;
     var packetType;
     var boxInfo;
+    var intervalID;
+    var pingTimeout;
 //    var sentCommandPool = new Pool();
     var commandQueue = new Queue();
     socket.on('data', function(packet) {
         var recvPacket = packet.toString();
         console.log('------------ Start of chunk --------------'.red);
         console.log(('Received Data[' + recvPacket + ']').green);
-        console.log('------------ End of chunk --------------'.red);
+        console.log(socket.remoteAddress + ":" + socket.remotePort);
+        if (!intervalID) {
+            intervalID = setInterval(ping, 30000);
+        }
+
         recvPacket = recvPacket.replace('\r', '');
         recvPacket = recvPacket.replace('\n', '');
         info = getInfo(recvPacket, ",");
+
         packetType = getDataPacketType(recvPacket);
+
         switch (packetType) {
+            case 'RMC':
+                // TODO $rmc data handling here!
+                return;
             case 'GREET':
                 Utils.log('Connection from: ' + info.IMEI);
                 boxInfo = info;
@@ -308,6 +293,10 @@ function Box(SOCKET) {
             Utils.log('Remaining Connection: ' + count);
         });
         console.log('----------------------------------------------------\n\n');
+    }).on('error', function(error) {
+        Utils.log('Socket Error: ' + error);
+        socket.destroy();
+        process.exit(0);
     });
 //--------- Member Functions -----------------
 
@@ -329,7 +318,9 @@ function Box(SOCKET) {
                 break;
             case 'PVT':
                 Utils.log('Got PVT!');
-                PVTDataHandler(detail.DATA, function(result) {
+                PVTDataHandler(detail.DATA, detail.SIZE, function(result) {
+                    console.log(result);
+                    commandQueue.enqueue(PVTFunction('OFF'));
                     sendFMICommand(ACKBuilder(detail.ID));
                 });
                 break;
@@ -427,11 +418,17 @@ function Box(SOCKET) {
                 break;
             case 0x0211: // Stop Status
                 Utils.log('Got FMP - Stop Status');
-                getStopIDAndStatus(detail.DATA, function(result) {
+                getStopIDAndStatus(detail.DATA, detail.SIZE, function(result) {
                     commandQueue.enqueue(stopStatusReceiptBuilder(result.ID));
                     pg_updateStoppointStatus(result);
                     sendFMICommand(ACKBuilder(detail.ID));
                 });
+                break;
+
+
+            case 0x0261: // Ping Response
+                Utils.log('Got Ping Response');
+                sendFMICommand(ACKBuilder(detail.ID));
                 break;
             case 0x0813:// Driver ID Update D607
                 Utils.log('Got FMP - Driver ID Packet');
@@ -474,34 +471,42 @@ function Box(SOCKET) {
 //@todo write pvt data handler
     /**
      * PVT Data handler, return the array object that contain PVT data detail
-     * @param {type} DATA
+     * @param {String} DATA
+     * @param {String} SIZE Data Size
      * @param {type} callback
      * @returns {Array} PVT Data detail
      */
-    function PVTDataHandler(DATA, callback) {
+    function PVTDataHandler(DATA, SIZE, callback) {
         console.log(DATA.green);
+        console.log(SIZE);
+        console.log((DATA.length - 2) / 2);
+        if ((DATA.length - 2) / 2 !== SIZE) {
+            console.error('PVT Packet Invalid - Ignore packet');
+            return;
+        }
         var result = new Array();
         result.AlT = '';
         result.EPE = '';
         result.EPV = '';
         result.EPH = '';
-        result.GPSFIX = reverseToLE(DATA.substr(40, 4));
-        result.TIMEOFWEEK = reverseToLE(DATA.substr(48, 4)); // 24th byte ?
+        result.GPSFIX = parseInt(reverseToLE(DATA.substr(32, 4)), 16);
         result.LAT = '';
         result.LON = '';
-        result.EASTVEL = '';
-        result.NORTHVEL = '';
+        result.EASTVEL = ''; // require
+        result.NORTHVEL = ''; //require
         result.UPVEL = '';
         result.ABOVESEA = '';
-        result.LEAPSECS = '';
-        result.NUMWEEKDAYS = '';
-        console.log(DATA);
+        result.LEAPSECS = parseInt(reverseToLE(DATA.substr(DATA.length - 12, 4)), 16);
+        result.NUMWEEKDAYS = parseInt(reverseToLE(DATA.substr(DATA.length - 8, 4)), 16);
         if (callback) {
             callback(result);
         }
 
         return result;
     }
+
+
+
 
     /**
      * Create the Stop Status Receipt command
@@ -518,14 +523,22 @@ function Box(SOCKET) {
     /**
      * Get the Stop ID and Staus from the packet
      * @param {type} data FMP payload data packet
+     * @param {Number} size expected packet size
      * @param {type} callback callback function
      * @returns {Array} result
      */
-    function getStopIDAndStatus(data, callback) {
+    function getStopIDAndStatus(data, size, callback) {
+        console.log(data);
+        console.log(data.length);
+        console.log(size);
+        if (data.length / 2 !== size) {
+            console.error('invalid stoppoint status ');
+            return false;
+        }
         var result = new Array();
         result.ID = reverseToLE(data.substr(4, 8));
-        result.STATUS = parseInt(data.substr(12, 2), 16);
-        result.INDEX = parseInt(data.substr(14, 4), 16);
+        result.STATUS = parseInt(reverseToLE(data.substr(12, 4)), 16);
+        result.INDEX = parseInt(reverseToLE(data.substr(16, 2)), 16);
         if (callback) {
             return callback(result);
         }
@@ -844,6 +857,8 @@ function Box(SOCKET) {
         } else
         if (message.search('FMI') !== -1) {
             return 'FMI';
+        } else if (message.search('&rmc') !== -1) {
+            return 'RMC';
         } else {
             return 'unhandle';
         }
@@ -859,7 +874,7 @@ function Box(SOCKET) {
         Utils.log('Sending Command: ' + commandString.substring(0, commandString.length - 2));
         socket.write(commandString);
         if (callback) {
-            callback();
+            return callback();
         }
         return getPacketID(command);
     }
@@ -980,6 +995,9 @@ function Box(SOCKET) {
                 break;
             case 0x0211:
                 FMIPID.type = 'STOP_STATUS';
+                break;
+            case 0x0261:
+                FMIPID.type = 'PING_RESP';
                 break;
             case 0x0802:
                 FMIPID.type = 'SET_DRIVER_STATUS_LIST';
@@ -1428,6 +1446,7 @@ function Box(SOCKET) {
         commandQueue.enqueue(statusListBuilder(0, 'status 0'));
         commandQueue.enqueue(statusListBuilder(1, 'status 1'));
         commandQueue.enqueue(statusListBuilder(2, 'Status 2'));
+        commandQueue.enqueue(statusListBuilder(3, 'Status 3'));
         // set initial status to index 0 
         commandQueue.enqueue(defaultStatusBuilder());
         // queue: Requesting Driver ID
@@ -1458,9 +1477,11 @@ function Box(SOCKET) {
                 console.log(('Checkpoints : ' + data[1]).red);
                 break;
             case 'PVT':
+                console.log('Got PVT Command: ' + data[1]);
                 commandQueue.enqueue(PVTFunction(data[1]));
                 break;
             case 'ETA':
+                console.log('Got ETA Request');
                 commandQueue.enqueue('10a10200025b1003');
                 break;
             default:
@@ -1517,7 +1538,6 @@ function Box(SOCKET) {
     function PVTFunction(state) {
         if (state === 'ON') {
             return '100a023100c31003';
-
         } else {
             return '100a023200c21003';
         }
@@ -1532,6 +1552,15 @@ function Box(SOCKET) {
     }
 
     /**
+     * Convert input hex string to floating point value
+     * @param {String} hexString
+     * @returns {Number} result as floating point
+     */
+    function hexStringToFloat(hexString) {
+        var float = (parseInt(hexString, 16) * 180.0) / (1.0 * Math.pow(2, 31));
+        return float;
+    }
+    /**
      * Convert byyte array to string
      * @param {Byte[]} byteArray
      * @returns {String} result
@@ -1543,5 +1572,14 @@ function Box(SOCKET) {
         }
         return result;
     }
+
+    function ping() {
+        console.log('----------------PING----------------');
+        var commandString = '@PCswFMI,' + info.IMEI + ',10a1026002fb1003\r\n';
+        socket.write(commandString);
+        console.log(commandString);
+    }
+
+
 
 }
